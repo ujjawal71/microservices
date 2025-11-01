@@ -11,6 +11,7 @@ import {
   TextField,
   Box,
   CircularProgress,
+  Chip,
 } from '@mui/material';
 import api from '../services/api';
 
@@ -236,9 +237,20 @@ const Products = () => {
                 />
               )}
               <CardContent>
-                <Typography variant="h6" component="h3" gutterBottom>
-                  {product.name}
-                </Typography>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
+                  <Typography variant="h6" component="h3" gutterBottom sx={{ flex: 1 }}>
+                    {product.name}
+                  </Typography>
+                  {/* Stock Status Badge */}
+                  {product.stockQuantity !== null && product.stockQuantity !== undefined && (
+                    <Chip
+                      label={product.stockQuantity > 0 ? `In Stock (${product.stockQuantity})` : 'Out of Stock'}
+                      color={product.stockQuantity > 0 ? 'success' : 'error'}
+                      size="small"
+                      sx={{ ml: 1 }}
+                    />
+                  )}
+                </Box>
                 <Typography variant="body2" color="text.secondary" paragraph>
                   {product.description}
                 </Typography>
@@ -250,8 +262,11 @@ const Products = () => {
                   fullWidth
                   component={Link}
                   to={`/products/${product.id}`}
+                  disabled={product.stockQuantity !== null && product.stockQuantity !== undefined && product.stockQuantity <= 0}
                 >
-                  View Details
+                  {product.stockQuantity !== null && product.stockQuantity !== undefined && product.stockQuantity <= 0 
+                    ? 'Out of Stock' 
+                    : 'View Details'}
                 </Button>
               </CardContent>
             </Card>

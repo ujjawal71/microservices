@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * PRODUCT SERVICE - Product Management Business Logic
@@ -130,10 +131,18 @@ public class ProductService {
      * 
      * New product add करता है
      * 
+     * DEFAULT STOCK QUANTITY:
+     * - If stockQuantity is null → Set default value 10
+     * - Ensures new products always have stock
+     * 
      * @param product - Product object to create
      * @return Product - Created product (with generated ID)
      */
     public Product createProduct(Product product) {
+        // Set default stock quantity if not provided
+        if (product.getStockQuantity() == null) {
+            product.setStockQuantity(10); // Default value: 10
+        }
         return productRepository.save(product);
     }
     
@@ -173,5 +182,45 @@ public class ProductService {
      */
     public void deleteProduct(Long id) {
         productRepository.deleteById(id);
+    }
+    
+    /**
+     * GET IN STOCK PRODUCTS
+     * 
+     * Filters products that are currently in stock (stockQuantity > 0)
+     * 
+     * USE CASE:
+     * - Frontend can show only available products
+     * - Hide out-of-stock products from catalog
+     * 
+     * @return List<Product> - Products that are in stock
+     */
+    @CircuitBreaker(name = "inventoryService", fallbackMethod = "getAllProductsFallback")
+    public List<Product> getInStockProducts() {
+        // Use repository query for better performance (database-level filtering)
+        // Equivalent to: SELECT * FROM products WHERE stock_quantity > 0
+        return productRepository.findByStockQuantityGreaterThan(0);
+    }
+    
+    /**
+     * GET OUT OF STOCK PRODUCTS
+     * 
+     * Filters products that are currently out of stock (stockQuantity <= 0)
+     * 
+     * USE CASE:
+     * - Admin can see which products need restocking
+     * - Inventory management
+     * 
+     * PERFORMANCE:
+     * - Uses database query (faster than Java filtering)
+     * - Repository method: findByStockQuantityLessThanOrEqual(0)
+     * 
+     * @return List<Product> - Products that are out of stock
+     */
+    @CircuitBreaker(name = "inventoryService", fallbackMethod = "getAllProductsFallback")
+    public List<Product> getOutOfStockProducts() {
+        // Use repository query for better performance (database-level filtering)
+        // Equivalent to: SELECT * FROM products WHERE stock_quantity <= 0
+        return productRepository.findByStockQuantityLessThanOrEqual(0);
     }
 }

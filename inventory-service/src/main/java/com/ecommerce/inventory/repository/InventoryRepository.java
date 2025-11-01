@@ -1,7 +1,11 @@
 package com.ecommerce.inventory.repository;
 
 import com.ecommerce.inventory.model.Inventory;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.Optional;
@@ -56,5 +60,36 @@ public interface InventoryRepository extends JpaRepository<Inventory, Long> {
      * - Null safety के लिए better than returning null
      */
     Optional<Inventory> findByProductId(Long productId);
+    
+    /**
+     * FIND BY PRODUCT ID WITH PESSIMISTIC LOCK
+     * 
+     * RACE CONDITION PREVENTION:
+     * - Uses SELECT ... FOR UPDATE (pessimistic locking)
+     * - Locks the row until transaction commits
+     * - Other transactions wait for lock release
+     * 
+     * SQL Equivalent:
+     * SELECT * FROM inventory WHERE product_id = ? FOR UPDATE
+     * 
+     * USE CASE:
+     * - Stock reservation (prevent overselling)
+     * - When multiple customers try to order same product simultaneously
+     * 
+     * EXAMPLE SCENARIO (1 stock left, 2 customers):
+     * Transaction A: findByProductIdWithLock(1) → Lock row → Check (1 available) → Reserve → Commit → Release lock ✅
+     * Transaction B: findByProductIdWithLock(1) → Wait for lock → Lock row → Check (0 available) → Return false ❌
+     * 
+     * @Lock(LockModeType.PESSIMISTIC_WRITE):
+     * - Acquires exclusive lock on the row
+     * - Other transactions cannot read or write until lock released
+     * - Prevents concurrent modifications
+     * 
+     * @param productId - Product का ID
+     * @return Optional<Inventory> - Locked inventory row
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE) // SELECT ... FOR UPDATE
+    @Query("SELECT i FROM Inventory i WHERE i.productId = :productId")
+    Optional<Inventory> findByProductIdWithLock(@Param("productId") Long productId);
 }
 

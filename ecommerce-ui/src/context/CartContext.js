@@ -34,12 +34,24 @@ export const CartProvider = ({ children }) => {
   }, [cartItems]);
 
   const addToCart = (product) => {
+    // Check if product is in stock before adding to cart
+    if (product.stockQuantity !== null && product.stockQuantity !== undefined && product.stockQuantity <= 0) {
+      alert('This product is out of stock. Cannot add to cart.');
+      return;
+    }
+    
     setCartItems((prevItems) => {
       const existingItem = prevItems.find(item => item.id === product.id);
       if (existingItem) {
+        const newQuantity = existingItem.quantity + 1;
+        // Check if adding one more would exceed stock
+        if (product.stockQuantity !== null && product.stockQuantity !== undefined && newQuantity > product.stockQuantity) {
+          alert(`Only ${product.stockQuantity} items available in stock. Cannot add more.`);
+          return prevItems;
+        }
         return prevItems.map(item =>
           item.id === product.id
-            ? { ...item, quantity: item.quantity + 1 }
+            ? { ...item, quantity: newQuantity }
             : item
         );
       }

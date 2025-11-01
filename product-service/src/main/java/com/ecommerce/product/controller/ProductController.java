@@ -180,4 +180,68 @@ public class ProductController {
         productService.deleteProduct(id);
         return ResponseEntity.noContent().build(); // 204 No Content
     }
+    
+    /**
+     * GET IN STOCK PRODUCTS
+     * 
+     * Get only products that are currently in stock (stockQuantity > 0)
+     * 
+     * USE CASE:
+     * - Frontend can show only available products
+     * - Hide out-of-stock products from catalog
+     * - Better user experience
+     * 
+     * @return ResponseEntity<List<Product>> - Products that are in stock
+     */
+    @GetMapping("/in-stock")
+    public ResponseEntity<List<Product>> getInStockProducts(
+            @RequestParam(required = false, defaultValue = "0") int page,
+            @RequestParam(required = false, defaultValue = "100") int size) {
+        List<Product> inStockProducts = productService.getInStockProducts();
+        
+        // Apply pagination
+        int start = page * size;
+        int end = Math.min(start + size, inStockProducts.size());
+        
+        if (start >= inStockProducts.size()) {
+            return ResponseEntity.ok(Collections.emptyList());
+        }
+        
+        List<Product> paginatedProducts = inStockProducts.subList(start, end);
+        return ResponseEntity.ok()
+                .header("X-Total-Count", String.valueOf(inStockProducts.size()))
+                .body(paginatedProducts);
+    }
+    
+    /**
+     * GET OUT OF STOCK PRODUCTS
+     * 
+     * Get only products that are currently out of stock (stockQuantity <= 0)
+     * 
+     * USE CASE:
+     * - Admin can see which products need restocking
+     * - Inventory management
+     * - Restock notifications
+     * 
+     * @return ResponseEntity<List<Product>> - Products that are out of stock
+     */
+    @GetMapping("/out-of-stock")
+    public ResponseEntity<List<Product>> getOutOfStockProducts(
+            @RequestParam(required = false, defaultValue = "0") int page,
+            @RequestParam(required = false, defaultValue = "100") int size) {
+        List<Product> outOfStockProducts = productService.getOutOfStockProducts();
+        
+        // Apply pagination
+        int start = page * size;
+        int end = Math.min(start + size, outOfStockProducts.size());
+        
+        if (start >= outOfStockProducts.size()) {
+            return ResponseEntity.ok(Collections.emptyList());
+        }
+        
+        List<Product> paginatedProducts = outOfStockProducts.subList(start, end);
+        return ResponseEntity.ok()
+                .header("X-Total-Count", String.valueOf(outOfStockProducts.size()))
+                .body(paginatedProducts);
+    }
 }

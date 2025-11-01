@@ -103,11 +103,23 @@ public class Product {
     /**
      * STOCK QUANTITY
      * 
+     * STOCK MANAGEMENT:
+     * - Default value: 10 (set in code when creating product via API)
+     * - NOT set as database default (only set when product is created)
+     * - Represents available stock quantity
+     * - Value 0 or less means OUT OF STOCK
+     * 
      * NOTE: This is denormalized data
      * Actual stock managed by Inventory Service
      * This field may be used for quick reference or legacy support
+     * 
+     * VALIDATION:
+     * - Cannot be negative
+     * - ACID: Consistency - Stock quantity must be >= 0
+     * - Can be NULL for existing products (not yet updated)
      */
-    private Integer stockQuantity;
+    @Column(name = "stock_quantity")
+    private Integer stockQuantity; // No database default - set in code only
     
     /**
      * DEFAULT CONSTRUCTOR
@@ -136,5 +148,47 @@ public class Product {
     public void setImageUrl(String imageUrl) { this.imageUrl = imageUrl; }
     
     public Integer getStockQuantity() { return stockQuantity; }
-    public void setStockQuantity(Integer stockQuantity) { this.stockQuantity = stockQuantity; }
+    public void setStockQuantity(Integer stockQuantity) { 
+        // ACID: Consistency - Stock cannot be negative
+        if (stockQuantity != null && stockQuantity < 0) {
+            throw new IllegalArgumentException("Stock quantity cannot be negative");
+        }
+        this.stockQuantity = stockQuantity; 
+    }
+    
+    /**
+     * IS IN STOCK - Check if product is available
+     * 
+     * BUSINESS RULE:
+     * - Product is in stock if stockQuantity > 0
+     * - Product is out of stock if stockQuantity <= 0
+     * 
+     * USE CASE:
+     * - Frontend can disable "Add to Cart" button if out of stock
+     * - Display "Out of Stock" message
+     * - Filter products by stock availability
+     * 
+     * @return boolean - true if product is in stock (stockQuantity > 0), false otherwise
+     */
+    public boolean isInStock() {
+        return stockQuantity != null && stockQuantity > 0;
+    }
+    
+    /**
+     * IS OUT OF STOCK - Check if product is unavailable
+     * 
+     * @return boolean - true if product is out of stock (stockQuantity <= 0), false otherwise
+     */
+    public boolean isOutOfStock() {
+        return !isInStock(); // Inverse of isInStock()
+    }
+    
+    /**
+     * GET STOCK STATUS - Human-readable stock status
+     * 
+     * @return String - "In Stock" or "Out of Stock"
+     */
+    public String getStockStatus() {
+        return isInStock() ? "In Stock" : "Out of Stock";
+    }
 }

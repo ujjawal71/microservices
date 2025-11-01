@@ -66,4 +66,34 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
      * @return List<Product> - Matching products
      */
     List<Product> findByNameContainingIgnoreCase(String name);
+    
+    /**
+     * FIND BY STOCK QUANTITY GREATER THAN
+     * 
+     * Spring Data JPA automatically generates:
+     * SELECT * FROM products WHERE stock_quantity > ?
+     * 
+     * USE CASE:
+     * - Find in-stock products (stockQuantity > 0)
+     * - Better performance than filtering in Java
+     * 
+     * @param stockQuantity - Minimum stock quantity
+     * @return List<Product> - Products with stock greater than specified value
+     */
+    List<Product> findByStockQuantityGreaterThan(Integer stockQuantity);
+    
+    /**
+     * FIND BY STOCK QUANTITY LESS THAN OR EQUAL TO
+     * 
+     * Spring Data JPA automatically generates:
+     * SELECT * FROM products WHERE stock_quantity <= ?
+     * 
+     * USE CASE:
+     * - Find out-of-stock products (stockQuantity <= 0)
+     * - Better performance than filtering in Java
+     * 
+     * @param stockQuantity - Maximum stock quantity
+     * @return List<Product> - Products with stock less than or equal to specified value
+     */
+    List<Product> findByStockQuantityLessThanOrEqual(Integer stockQuantity);
 }

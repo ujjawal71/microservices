@@ -200,9 +200,11 @@ public class InventoryService {
             throw new RuntimeException("No active transaction - ACID violation risk");
         }
         
-        // Find inventory (with pessimistic lock if possible)
+        // Find inventory WITH PESSIMISTIC LOCK (RACE CONDITION PREVENTION)
         // DEADLOCK PREVENTION: Consistent ordering by productId
-        Inventory inventory = inventoryRepository.findByProductId(productId)
+        // @Lock(LockModeType.PESSIMISTIC_WRITE) = SELECT ... FOR UPDATE
+        // This locks the row until transaction commits, preventing concurrent reservations
+        Inventory inventory = inventoryRepository.findByProductIdWithLock(productId)
                 .orElseThrow(() -> new RuntimeException("Product not found in inventory"));
         
         // ACID: Consistency - Check business rule

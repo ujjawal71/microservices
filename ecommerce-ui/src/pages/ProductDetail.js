@@ -103,21 +103,55 @@ const ProductDetail = () => {
             Category: {product.category}
           </Typography>
           <Typography variant="body2" color="text.secondary" gutterBottom>
-            Stock: {product.stockQuantity || 'N/A'}
+            Stock: {product.stockQuantity !== null && product.stockQuantity !== undefined ? product.stockQuantity : 'N/A'}
           </Typography>
+          {/* Stock Status Display */}
+          <Box sx={{ mt: 1, mb: 2 }}>
+            {product.stockQuantity !== null && product.stockQuantity !== undefined && (
+              <Typography 
+                variant="body1" 
+                sx={{ 
+                  fontWeight: 'bold',
+                  color: product.stockQuantity > 0 ? 'success.main' : 'error.main'
+                }}
+              >
+                {product.stockQuantity > 0 ? '✅ In Stock' : '❌ Out of Stock'}
+              </Typography>
+            )}
+          </Box>
           <Box sx={{ mt: 3, display: 'flex', gap: 2, alignItems: 'center' }}>
             <TextField
               type="number"
               label="Quantity"
               value={quantity}
-              onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-              inputProps={{ min: 1 }}
+              onChange={(e) => {
+                const newQuantity = Math.max(1, parseInt(e.target.value) || 1);
+                // Limit quantity to available stock
+                const maxQuantity = (product.stockQuantity && product.stockQuantity > 0) ? product.stockQuantity : 1;
+                setQuantity(Math.min(newQuantity, maxQuantity));
+              }}
+              inputProps={{ 
+                min: 1, 
+                max: product.stockQuantity && product.stockQuantity > 0 ? product.stockQuantity : 1
+              }}
               sx={{ width: 100 }}
+              disabled={!product.stockQuantity || product.stockQuantity <= 0}
             />
-            <Button variant="contained" size="large" onClick={handleAddToCart}>
-              Add to Cart
+            <Button 
+              variant="contained" 
+              size="large" 
+              onClick={handleAddToCart}
+              disabled={!product.stockQuantity || product.stockQuantity <= 0}
+            >
+              {product.stockQuantity && product.stockQuantity > 0 ? 'Add to Cart' : 'Out of Stock'}
             </Button>
           </Box>
+          {/* Warning message if out of stock */}
+          {product.stockQuantity !== null && product.stockQuantity !== undefined && product.stockQuantity <= 0 && (
+            <Typography variant="body2" color="error" sx={{ mt: 1 }}>
+              This product is currently out of stock. Please check back later.
+            </Typography>
+          )}
         </Grid>
       </Grid>
     </Container>

@@ -1,5 +1,6 @@
 package com.ecommerce.order.service;
 
+import com.ecommerce.order.client.InventoryClient;
 import com.ecommerce.order.client.ProductClient;
 import com.ecommerce.order.dto.OrderRequest;
 import com.ecommerce.order.dto.ProductDto;
@@ -17,7 +18,9 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -115,6 +118,14 @@ public class OrderService {
     private final ProductClient productClient;
     
     /**
+     * INVENTORY CLIENT (Feign Client)
+     * Inventory Service को call करने के लिए
+     * Stock reservation के लिए
+     * RACE CONDITION HANDLING: Inventory Service uses pessimistic locking
+     */
+    private final InventoryClient inventoryClient;
+    
+    /**
      * KAFKA TEMPLATE
      * Kafka topics पर events publish करने के लिए
      * Asynchronous messaging के लिए
@@ -126,9 +137,10 @@ public class OrderService {
      * Spring automatically dependencies inject करता है
      */
     public OrderService(OrderRepository orderRepository, ProductClient productClient,
-                       KafkaTemplate<String, Object> kafkaTemplate) {
+                       InventoryClient inventoryClient, KafkaTemplate<String, Object> kafkaTemplate) {
         this.orderRepository = orderRepository;
         this.productClient = productClient;
+        this.inventoryClient = inventoryClient;
         this.kafkaTemplate = kafkaTemplate;
     }
     
@@ -229,19 +241,94 @@ public class OrderService {
                 .sorted(Comparator.comparing(OrderRequest.OrderItemRequest::getProductId))
                 .collect(Collectors.toList());
         
-        // Step 3: Process each order item
+        // Step 3: VALIDATE STOCK BEFORE CREATING ORDER
+        // ========================================================================
+        // STOCK VALIDATION & RACE CONDITION PREVENTION
+        // ========================================================================
+        // 
+        // PROBLEM: If 1 stock left and 2 customers order at same time:
+        // Without validation: Both orders created → Overselling ❌
+        // With validation: Only first order succeeds → Correct ✅
+        //
+        // SOLUTION:
+        // 1. Check stock availability from Product Service (quick check)
+        // 2. Reserve stock atomically in Inventory Service (with pessimistic locking)
+        // 3. Only create order if reservation succeeds
+        //
+        // RACE CONDITION HANDLING:
+        // - Inventory Service uses pessimistic locking (SELECT FOR UPDATE)
+        // - Only one transaction can reserve at a time
+        // - Atomic check-and-reserve operation prevents overselling
+        //
+        // EXAMPLE SCENARIO (1 stock left, 2 customers):
+        // Customer A: Reserve 1 → Lock row → Check (1 available) → Reserve → Commit ✅
+        // Customer B: Reserve 1 → Wait for lock → Lock row → Check (0 available) → Return false ❌
+        // Result: Only Customer A's order created ✅
+        //
+        // STOCK VALIDATION FLOW:
+        // 1. Get product info (includes stockQuantity from Product Service)
+        // 2. Quick validation: If stockQuantity <= 0 → Reject immediately
+        // 3. Reserve in Inventory Service (atomic with locking)
+        // 4. If reservation fails → Reject order (stock already reserved)
+        
+        // Store reservation results for rollback if needed
+        Map<Long, Integer> reservedItems = new HashMap<>();
+        
+        // Step 4: Process each order item (with stock validation)
         List<OrderItem> items = new ArrayList<>();
         for (var itemDto : sortedItems) { // Process in sorted order (deadlock prevention)
             try {
-                System.out.println("Fetching product: " + itemDto.getProductId());
+                System.out.println("Processing order item - Product ID: " + itemDto.getProductId() + ", Quantity: " + itemDto.getQuantity());
                 
+                // STEP 4.1: Fetch product information
                 // INTER-SERVICE CALL (Feign Client) - OUTSIDE TRANSACTION
                 // This call is outside transaction to prevent long-held locks
                 // DEADLOCK PREVENTION: Don't hold database locks during external calls
                 ProductDto product = productClient.getProduct(itemDto.getProductId());
-                System.out.println("Product fetched: " + product.getId() + " - " + product.getName());
+                System.out.println("Product fetched: " + product.getId() + " - " + product.getName() + 
+                                  ", Stock: " + product.getStockQuantity());
                 
-                // Step 4: Create OrderItem from Product details
+                // STEP 4.2: QUICK STOCK VALIDATION (from Product Service)
+                // First check: If product stock is null or 0, reject immediately
+                if (product.getStockQuantity() == null || product.getStockQuantity() <= 0) {
+                    throw new RuntimeException("Product '" + product.getName() + "' (ID: " + product.getId() + 
+                                             ") is OUT OF STOCK. Cannot create order.");
+                }
+                
+                // STEP 4.3: Validate quantity requested
+                if (itemDto.getQuantity() <= 0) {
+                    throw new RuntimeException("Order quantity must be greater than 0 for product ID: " + product.getId());
+                }
+                
+                // STEP 4.4: Check if requested quantity exceeds available stock
+                if (itemDto.getQuantity() > product.getStockQuantity()) {
+                    throw new RuntimeException("Insufficient stock for product '" + product.getName() + 
+                                             "'. Available: " + product.getStockQuantity() + 
+                                             ", Requested: " + itemDto.getQuantity());
+                }
+                
+                // STEP 4.5: RESERVE STOCK ATOMICALLY (RACE CONDITION PREVENTION)
+                // This is the critical step that prevents overselling
+                // Inventory Service uses pessimistic locking to ensure only one reservation succeeds
+                System.out.println("Reserving stock in Inventory Service - Product ID: " + product.getId() + 
+                                  ", Quantity: " + itemDto.getQuantity());
+                Boolean reservationSuccess = inventoryClient.reserveInventory(product.getId(), itemDto.getQuantity());
+                
+                if (reservationSuccess == null || !reservationSuccess) {
+                    // Stock reservation failed - another order may have taken the last stock
+                    // This handles the race condition scenario
+                    throw new RuntimeException("Stock reservation failed for product '" + product.getName() + 
+                                             "' (ID: " + product.getId() + "). " +
+                                             "Another order may have taken the available stock. " +
+                                             "Please try again with a lower quantity or check back later.");
+                }
+                
+                // STEP 4.6: Track reserved items (for potential rollback)
+                reservedItems.put(product.getId(), itemDto.getQuantity());
+                System.out.println("✅ Stock reserved successfully - Product ID: " + product.getId() + 
+                                  ", Reserved Quantity: " + itemDto.getQuantity());
+                
+                // STEP 4.7: Create OrderItem from Product details
                 OrderItem orderItem = new OrderItem();
                 orderItem.setOrder(order); // Link to parent order
                 orderItem.setProductId(product.getId());
@@ -250,11 +337,29 @@ public class OrderService {
                 orderItem.setPrice(product.getPrice()); // Price snapshot (price may change later)
                 
                 items.add(orderItem);
+                
             } catch (Exception e) {
-                // ACID: Atomicity - If any product fetch fails → entire transaction rolls back
-                System.err.println("Failed to fetch product " + itemDto.getProductId() + ": " + e.getMessage());
-                e.printStackTrace();
-                throw new RuntimeException("Failed to fetch product information: " + e.getMessage(), e);
+                // STEP 4.8: ERROR HANDLING - Release any already reserved stock
+                // If we reserved some items but failed on a later item, we need to release
+                // This is part of the compensation pattern (Saga pattern)
+                System.err.println("❌ Error processing order item - Product ID: " + itemDto.getProductId() + 
+                                 ", Error: " + e.getMessage());
+                
+                // Release already reserved items (compensation)
+                for (Map.Entry<Long, Integer> entry : reservedItems.entrySet()) {
+                    try {
+                        // TODO: Call Inventory Service release endpoint if it exists
+                        // For now, reservation will be released when order is cancelled or timeout
+                        System.err.println("Note: Stock reserved for Product ID " + entry.getKey() + 
+                                         " will be released automatically if order is not completed");
+                    } catch (Exception releaseEx) {
+                        System.err.println("Failed to release reserved stock for Product ID " + entry.getKey() + 
+                                         ": " + releaseEx.getMessage());
+                    }
+                }
+                
+                // ACID: Atomicity - If any item fails → entire transaction rolls back
+                throw new RuntimeException("Failed to process order item: " + e.getMessage(), e);
                 // Transaction automatically rolls back (ACID: Atomicity)
             }
         }
