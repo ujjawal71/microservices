@@ -258,7 +258,7 @@ public class ProductService {
      * 
      * PERFORMANCE:
      * - Uses database query (faster than Java filtering)
-     * - Repository method: findByStockQuantityLessThanOrEqual(0)
+     * - Repository method: findByStockQuantityLessThanEqual(0)
      * 
      * @return List<Product> - Products that are out of stock
      */
@@ -266,6 +266,6 @@ public class ProductService {
     public List<Product> getOutOfStockProducts() {
         // Use repository query for better performance (database-level filtering)
         // Equivalent to: SELECT * FROM products WHERE stock_quantity <= 0
-        return productRepository.findByStockQuantityLessThanOrEqual(0);
+        return productRepository.findByStockQuantityLessThanEqual(0);
     }
 }

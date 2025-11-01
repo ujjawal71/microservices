@@ -41,3 +41,4 @@ LEFT JOIN inventory i ON p.id = i.product_id
 ORDER BY p.id
 LIMIT 20;
 
+

@@ -29,3 +29,4 @@ SELECT
 FROM products
 GROUP BY stock_status;
 
+

@@ -92,8 +92,10 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
      * - Find out-of-stock products (stockQuantity <= 0)
      * - Better performance than filtering in Java
      * 
+     * NOTE: Using LessThanEqual (not LessThanOrEqual) - Spring Data JPA keyword
+     * 
      * @param stockQuantity - Maximum stock quantity
      * @return List<Product> - Products with stock less than or equal to specified value
      */
-    List<Product> findByStockQuantityLessThanOrEqual(Integer stockQuantity);
+    List<Product> findByStockQuantityLessThanEqual(Integer stockQuantity);
 }
