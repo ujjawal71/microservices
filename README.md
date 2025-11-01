@@ -24,7 +24,10 @@ A comprehensive, production-ready e-commerce application built with Spring Boot 
 16. [Testing](#testing)
 17. [Troubleshooting](#troubleshooting)
 18. [Production Considerations](#production-considerations)
-19. [Project Structure](#project-structure)
+19. [ACID Properties Implementation](#acid-properties-implementation)
+20. [Deadlock Prevention](#deadlock-prevention)
+21. [Advanced Microservices Concepts](#advanced-microservices-concepts)
+22. [Project Structure](#project-structure)
 
 ---
 
@@ -1789,4 +1792,892 @@ npm test
 - [ ] User login
 - [ ] Browse products
 - [ ] Search products
-- [ ] Add to c
+- [ ] Add to cart
+- [ ] Place order
+- [ ] View orders
+- [ ] Payment processing
+
+---
+
+## 🔐 ACID Properties Implementation
+
+### Overview
+
+All database operations in this project follow **ACID (Atomicity, Consistency, Isolation, Durability)** principles to ensure data integrity and reliability.
+
+### What is ACID?
+
+**ACID** is a set of properties that guarantee reliable database transactions:
+
+1. **Atomicity**: All operations in a transaction succeed or fail together (all-or-nothing)
+2. **Consistency**: Database remains in a valid state (business rules enforced)
+3. **Isolation**: Concurrent transactions don't interfere with each other
+4. **Durability**: Committed changes persist even after system failure
+
+---
+
+### 1. Atomicity Implementation
+
+**Definition**: All operations in a transaction are atomic (indivisible). Either all succeed or all fail.
+
+**Implementation**:
+
+#### Order Service Example
+
+```java
+@Transactional(
+    isolation = Isolation.READ_COMMITTED,
+    propagation = Propagation.REQUIRED,
+    timeout = 30,
+    rollbackFor = Exception.class
+)
+public Order createOrder(OrderRequest request) {
+    // Step 1: Create Order object
+    Order order = new Order();
+    // ... set order fields ...
+    
+    // Step 2: Process each order item
+    for (var itemDto : request.getItems()) {
+        ProductDto product = productClient.getProduct(itemDto.getProductId());
+        OrderItem orderItem = new OrderItem();
+        // ... create order item ...
+        items.add(orderItem);
+    }
+    
+    // Step 3: Calculate total amount
+    totalAmount = items.stream()
+        .map(item -> item.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())))
+        .reduce(BigDecimal.ZERO, BigDecimal::add);
+    
+    // Step 4: Save order (includes all items due to CascadeType.ALL)
+    Order savedOrder = orderRepository.save(order);
+    
+    // If ANY step fails → entire transaction rolls back
+    return savedOrder;
+}
+```
+
+**How It Works**:
+- `@Transactional` ensures all database operations are atomic
+- If product fetch fails → transaction rolls back, order not created
+- If save fails → transaction rolls back, no partial data saved
+- Order + OrderItems saved together (cascade)
+
+**Real-World Example**:
+```
+Transaction: Create order with 3 items
+├── Item 1: Success ✅
+├── Item 2: Success ✅
+└── Item 3: Product not found ❌
+    → Transaction rolls back
+    → No order created, no items saved
+    → Database remains consistent
+```
+
+---
+
+### 2. Consistency Implementation
+
+**Definition**: Database constraints and business rules are always enforced. Data remains valid.
+
+**Implementation**:
+
+#### Order Entity Consistency
+
+```java
+@Entity
+public class Order {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    
+    private Long userId;  // Foreign key constraint
+    
+    @Enumerated(EnumType.STRING)
+    private OrderStatus status = OrderStatus.PENDING;
+    
+    private BigDecimal totalAmount;  // Must equal sum of items
+    
+    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL)
+    private List<OrderItem> items;  // Relationship consistency
+}
+```
+
+**Business Rules Enforced**:
+
+1. **Total Amount Consistency**:
+   ```java
+   // Business rule: totalAmount = sum(item.price * item.quantity)
+   totalAmount = items.stream()
+       .map(item -> item.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())))
+       .reduce(BigDecimal.ZERO, BigDecimal::add);
+   
+   // Validation
+   if (totalAmount.compareTo(BigDecimal.ZERO) <= 0) {
+       throw new RuntimeException("Order total must be greater than zero");
+   }
+   ```
+
+2. **Status Transition Consistency**:
+   ```java
+   // Valid transitions: PENDING → CONFIRMED → SHIPPED → DELIVERED
+   if (!isValidStatusTransition(order.getStatus(), newStatus)) {
+       throw new RuntimeException("Invalid status transition");
+   }
+   ```
+
+3. **Inventory Consistency**:
+   ```java
+   // Business rule: availableQuantity = quantity - reservedQuantity
+   public Integer getAvailableQuantity() {
+       return quantity - reservedQuantity;  // Always consistent
+   }
+   
+   // Validation: Cannot reserve more than available
+   if (availableQuantity < quantity) {
+       throw new RuntimeException("Insufficient stock");
+   }
+   ```
+
+**Database Constraints**:
+- Foreign keys ensure referential integrity
+- Unique constraints (username, email)
+- Not null constraints
+- Check constraints (quantity >= 0)
+
+---
+
+### 3. Isolation Implementation
+
+**Definition**: Concurrent transactions don't interfere with each other. Each transaction sees a consistent snapshot.
+
+**Implementation**:
+
+#### Isolation Levels
+
+```java
+@Transactional(
+    isolation = Isolation.READ_COMMITTED,  // ACID: Isolation level
+    timeout = 30
+)
+public Order createOrder(OrderRequest request) {
+    // Transaction sees only committed data from other transactions
+    // Prevents dirty reads (reading uncommitted data)
+}
+```
+
+**Isolation Levels Used**:
+
+1. **READ_COMMITTED** (Default):
+   - Prevents dirty reads (reading uncommitted data)
+   - Allows non-repeatable reads
+   - Used in: OrderService, PaymentService, InventoryService
+
+2. **READ_UNCOMMITTED** (Not used):
+   - Lowest isolation, allows dirty reads
+   - Not recommended for production
+
+3. **REPEATABLE_READ** (Available if needed):
+   - Prevents dirty reads and non-repeatable reads
+   - Higher isolation, more locking
+
+4. **SERIALIZABLE** (Available if needed):
+   - Highest isolation, prevents all anomalies
+   - Most locking, lowest concurrency
+
+**Concurrent Transaction Handling**:
+
+```java
+// Transaction A: Create order for Product 1
+@Transactional(isolation = Isolation.READ_COMMITTED)
+public Order createOrder(OrderRequest request) {
+    // Locks order row during transaction
+    // Transaction B waits if trying to update same order
+}
+
+// Transaction B: Update order status
+@Transactional(isolation = Isolation.READ_COMMITTED)
+public Order updateOrderStatus(Long id, OrderStatus status) {
+    // Waits for Transaction A to commit/rollback
+    // Then proceeds with consistent data
+}
+```
+
+---
+
+### 4. Durability Implementation
+
+**Definition**: Once a transaction commits, changes are permanent and survive system failures.
+
+**Implementation**:
+
+```java
+@Transactional
+public Order createOrder(OrderRequest request) {
+    Order order = new Order();
+    // ... set fields ...
+    
+    // Save to database
+    Order savedOrder = orderRepository.save(order);
+    
+    // Transaction commits here
+    // Database write-ahead log (WAL) ensures durability
+    // Even if system crashes → data is safe
+    
+    return savedOrder;
+}
+```
+
+**Durability Guarantees**:
+
+1. **Database Write-Ahead Log (WAL)**:
+   - Changes written to log before commit
+   - System crash → database recovers from log
+   - PostgreSQL uses WAL for durability
+
+2. **Transaction Commit**:
+   ```java
+   // Commit happens automatically after method returns
+   // No exception → commit (durable)
+   // Exception → rollback (no changes)
+   ```
+
+3. **Persistent Storage**:
+   - PostgreSQL stores data on disk
+   - Data survives application restarts
+   - Data survives server crashes (with proper backup)
+
+**Example**:
+```
+Order created → Saved to database → Transaction committed
+    ↓
+System crashes immediately after
+    ↓
+On restart: Order still exists in database ✅
+    ↓
+Durability guaranteed!
+```
+
+---
+
+### ACID Verification
+
+**Check Transaction Status**:
+
+```java
+@Transactional
+public Order createOrder(OrderRequest request) {
+    // Verify transaction is active
+    if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+        throw new RuntimeException("No active transaction - ACID violation risk");
+    }
+    
+    // ... perform operations ...
+    
+    // Verify transaction still active
+    if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+        throw new RuntimeException("Transaction lost - ACID violation");
+    }
+    
+    return savedOrder;
+}
+```
+
+---
+
+### ACID Properties by Service
+
+| Service | Atomicity | Consistency | Isolation | Durability |
+|---------|-----------|-------------|-----------|------------|
+| **Order Service** | ✅ @Transactional | ✅ Business rules | ✅ READ_COMMITTED | ✅ Database commit |
+| **Payment Service** | ✅ @Transactional | ✅ Payment validation | ✅ READ_COMMITTED | ✅ Database commit |
+| **Inventory Service** | ✅ @Transactional | ✅ Stock rules | ✅ READ_COMMITTED | ✅ Database commit |
+| **User Service** | ✅ @Transactional | ✅ User validation | ✅ READ_COMMITTED | ✅ Database commit |
+
+---
+
+## 🚫 Deadlock Prevention
+
+### Overview
+
+**Deadlock** occurs when two or more transactions wait indefinitely for each other to release locks. This project implements multiple strategies to prevent deadlocks.
+
+### What is Deadlock?
+
+**Deadlock Scenario**:
+```
+Transaction A:
+1. Locks Order 1
+2. Waits for Order 2 (locked by Transaction B) ❌
+
+Transaction B:
+1. Locks Order 2
+2. Waits for Order 1 (locked by Transaction A) ❌
+
+Result: Both transactions wait forever → Deadlock! ❌
+```
+
+---
+
+### Prevention Strategies Implemented
+
+### 1. Consistent Lock Ordering
+
+**Strategy**: Always acquire locks in the same order (sorted by ID).
+
+**Implementation**:
+
+#### Order Service Example
+
+```java
+@Transactional
+public Order createOrder(OrderRequest request) {
+    // DEADLOCK PREVENTION: Sort items by productId
+    // Ensures all transactions process products in same order
+    List<OrderRequest.OrderItemRequest> sortedItems = request.getItems().stream()
+            .sorted(Comparator.comparing(OrderRequest.OrderItemRequest::getProductId))
+            .collect(Collectors.toList());
+    
+    // Process in sorted order
+    for (var itemDto : sortedItems) {
+        // Always locks Product 1 before Product 2
+        // Prevents circular wait conditions
+    }
+}
+```
+
+**Why It Works**:
+- If all transactions lock in order (Product 1 → Product 2)
+- No circular wait possible
+- Deadlock prevented ✅
+
+**Example**:
+```
+Transaction A: Lock Product 1 → Lock Product 2 ✅
+Transaction B: Lock Product 1 (wait) → Lock Product 2 ✅
+    ↓
+No deadlock! Transaction B waits for A to finish, then proceeds
+```
+
+---
+
+### 2. Transaction Timeout
+
+**Strategy**: Limit transaction duration to prevent long-held locks.
+
+**Implementation**:
+
+```java
+@Transactional(
+    isolation = Isolation.READ_COMMITTED,
+    timeout = 30  // DEADLOCK PREVENTION: Timeout after 30 seconds
+)
+public Order createOrder(OrderRequest request) {
+    // If transaction takes longer than 30 seconds
+    // → Automatically rollback
+    // → Lock released
+    // → Deadlock broken
+}
+```
+
+**How It Works**:
+- Database automatically kills timed-out transactions
+- Locks released immediately
+- Deadlock resolved ✅
+
+**Timeout Configuration by Service**:
+
+| Service | Method | Timeout |
+|---------|--------|---------|
+| **Order Service** | `createOrder()` | 30 seconds |
+| **Order Service** | `updateOrderStatus()` | 10 seconds |
+| **Payment Service** | `processPayment()` | 15 seconds |
+| **Inventory Service** | `reserveInventory()` | 10 seconds |
+| **Inventory Service** | `deductInventory()` | 10 seconds |
+
+---
+
+### 3. Pessimistic Locking
+
+**Strategy**: Explicitly lock rows to prevent concurrent modifications.
+
+**Implementation**:
+
+#### Payment Repository
+
+```java
+@Lock(LockModeType.PESSIMISTIC_WRITE)  // Pessimistic lock
+@Query("SELECT p FROM Payment p WHERE p.orderId = :orderId")
+@QueryHints({
+    @QueryHint(name = "jakarta.persistence.lock.timeout", value = "5000")  // 5 second timeout
+})
+List<Payment> findByOrderIdWithLock(Long orderId);
+```
+
+**How It Works**:
+- `SELECT FOR UPDATE` locks row during transaction
+- Other transactions wait for lock release
+- Prevents lost updates and race conditions
+
+**Example**:
+```
+Transaction A: SELECT ... FOR UPDATE (locks row)
+Transaction B: SELECT ... FOR UPDATE (waits for lock)
+    ↓
+Transaction A completes → Lock released
+    ↓
+Transaction B proceeds → No deadlock ✅
+```
+
+---
+
+### 4. Minimal Transaction Scope
+
+**Strategy**: Keep transactions short. Move external calls outside transactions.
+
+**Implementation**:
+
+```java
+@Transactional(timeout = 30)
+public Order createOrder(OrderRequest request) {
+    // IN TRANSACTION: Database operations only
+    Order savedOrder = orderRepository.save(order);
+    
+    // OUTSIDE TRANSACTION: External calls (Feign, Kafka)
+    // Don't hold database locks during external calls
+    new Thread(() -> {
+        kafkaTemplate.send("order-created", savedOrder);
+    }).start();
+    
+    return savedOrder;
+}
+```
+
+**Why It Works**:
+- External calls (Feign, Kafka) can take time
+- Holding database locks during external calls → risk of deadlock
+- Moving external calls outside → shorter transactions → less deadlock risk
+
+---
+
+### 5. Lock Timeout Configuration
+
+**Strategy**: Configure lock timeouts at database level.
+
+**Implementation**:
+
+```java
+@QueryHints({
+    @QueryHint(name = "jakarta.persistence.lock.timeout", value = "5000")
+})
+```
+
+**How It Works**:
+- If lock cannot be acquired within timeout
+- Operation fails fast (doesn't wait forever)
+- Prevents indefinite waiting → no deadlock
+
+---
+
+### Deadlock Prevention Summary
+
+| Strategy | Implementation | Service |
+|----------|----------------|---------|
+| **Consistent Lock Ordering** | Sort by ID before locking | Order Service, Inventory Service |
+| **Transaction Timeout** | `@Transactional(timeout = X)` | All services |
+| **Pessimistic Locking** | `@Lock(LockModeType.PESSIMISTIC_WRITE)` | Payment Repository, Order Repository |
+| **Minimal Transaction Scope** | External calls outside `@Transactional` | Order Service, Payment Service |
+| **Lock Timeout** | `@QueryHint` with timeout | Payment Repository, Order Repository |
+
+---
+
+### Race Condition Prevention
+
+**Problem**: Two orders for same product at same time
+
+**Without Locking (Race Condition)**:
+```
+Transaction A: Check stock (10 available) → Reserve 5
+Transaction B: Check stock (10 available) → Reserve 5 (at same time)
+    ↓
+Result: Both reserve 5, total reserved = 10, but only 10 available! ❌
+    ↓
+Overselling!
+```
+
+**With Pessimistic Locking (Safe)**:
+```java
+@Transactional(isolation = Isolation.READ_COMMITTED)
+public boolean reserveInventory(Long productId, Integer quantity) {
+    // Locks inventory row
+    Inventory inventory = inventoryRepository.findByProductId(productId);
+    
+    // Check available stock
+    if (inventory.getAvailableQuantity() >= quantity) {
+        // Reserve stock
+        inventory.setReservedQuantity(
+            inventory.getReservedQuantity() + quantity
+        );
+        inventoryRepository.save(inventory);
+        return true;
+    }
+    return false;
+}
+```
+
+**How It Works**:
+```
+Transaction A: Lock row → Check (10) → Reserve 5 → Commit → Release lock
+Transaction B: Wait for lock → Lock row → Check (5 available) → Reserve 5 ✅
+    ↓
+No overselling! Race condition prevented ✅
+```
+
+---
+
+## 🌐 Advanced Microservices Concepts
+
+### Overview
+
+This project implements advanced microservices patterns and concepts beyond basic service decomposition.
+
+---
+
+### 1. Saga Pattern (Distributed Transactions)
+
+**Problem**: In microservices, transactions span multiple services. Traditional ACID transactions don't work across services.
+
+**Solution**: Saga Pattern - Distributed transaction management using events or choreography.
+
+**Implementation**:
+
+#### Order Creation Saga
+
+```java
+// Order Service: Step 1 - Create Order
+@Transactional
+public Order createOrder(OrderRequest request) {
+    Order order = new Order();
+    // ... create order ...
+    Order savedOrder = orderRepository.save(order);
+    
+    // Publish event (triggers saga steps)
+    kafkaTemplate.send("order-created", savedOrder);
+    
+    return savedOrder;
+}
+```
+
+**Saga Steps**:
+
+```
+1. Order Service: Create Order ✅
+   ↓ Publishes "order-created" event
+   
+2. Inventory Service: Reserve Stock ✅
+   ↓ (consumes event, reserves inventory)
+   
+3. Payment Service: Process Payment ✅
+   ↓ (consumes event, processes payment)
+   
+4. Payment Service: Update Order Status ✅
+   ↓ (calls Order Service via Feign)
+   
+5. Notification Service: Send Notification ✅
+   ↓ (consumes event, sends email)
+```
+
+**Compensation (Rollback)**:
+
+If payment fails:
+```java
+// Payment Service: Payment failed
+// → Publish "payment-failed" event
+// → Inventory Service: Release reserved stock (compensation)
+// → Order Service: Cancel order (compensation)
+```
+
+**Benefits**:
+- ✅ Works across multiple services
+- ✅ Eventual consistency
+- ✅ No distributed locks needed
+- ✅ Scalable
+
+---
+
+### 2. Eventual Consistency
+
+**Definition**: Services don't need to be immediately consistent. They become consistent eventually through events.
+
+**Example**:
+
+```
+Order Created (Order Service)
+    ↓
+Event Published: "order-created"
+    ↓
+Inventory Service receives event (may be delayed)
+    ↓
+Inventory reserved (eventually consistent) ✅
+```
+
+**Benefits**:
+- Better performance (no waiting)
+- Better scalability
+- Fault tolerance
+
+**Trade-offs**:
+- Temporary inconsistency acceptable
+- Eventual consistency (not immediate)
+
+---
+
+### 3. Idempotency
+
+**Definition**: Same request processed multiple times produces same result.
+
+**Implementation**:
+
+#### Payment Service Example
+
+```java
+@Transactional
+public Payment savePayment(Payment payment) {
+    // Check if payment already exists (idempotency)
+    if (payment.getTransactionId() != null) {
+        List<Payment> existing = paymentRepository
+            .findByTransactionId(payment.getTransactionId());
+        if (!existing.isEmpty()) {
+            // Payment already saved (idempotency)
+            return existing.get(0);  // Return existing, don't create duplicate
+        }
+    }
+    
+    // Save new payment
+    return paymentRepository.save(payment);
+}
+```
+
+**Use Cases**:
+- Retry-safe operations
+- Duplicate request handling
+- Kafka message processing (messages can be delivered multiple times)
+
+---
+
+### 4. CQRS (Command Query Responsibility Segregation)
+
+**Concept**: Separate read and write models.
+
+**Implementation** (Simplified):
+
+```java
+// Write Model: Order (for creating orders)
+@Entity
+public class Order {
+    // Full order entity with relationships
+}
+
+// Read Model: OrderDto (for displaying orders)
+public class OrderDto {
+    // Flattened, denormalized for fast reads
+    private Long id;
+    private String userName;  // Denormalized
+    private List<OrderItemDto> items;
+}
+```
+
+---
+
+### 5. API Gateway Pattern
+
+**Purpose**: Single entry point for all client requests.
+
+**Features**:
+- Request routing
+- Load balancing
+- CORS handling
+- Circuit breakers
+- Authentication/Authorization
+
+**Implementation**: Spring Cloud Gateway with Eureka integration
+
+---
+
+### 6. Service Mesh (Concept)
+
+**Future Enhancement**: Service mesh for advanced traffic management, security, and observability.
+
+**Options**: Istio, Linkerd
+
+---
+
+### 7. Distributed Tracing
+
+**Implementation**: Zipkin with Micrometer Tracing
+
+**Benefits**:
+- Track requests across services
+- Performance analysis
+- Error debugging
+- Service dependency visualization
+
+---
+
+### 8. Health Checks and Monitoring
+
+**Spring Boot Actuator**:
+- Health endpoints: `/actuator/health`
+- Metrics: `/actuator/metrics`
+- Info: `/actuator/info`
+
+---
+
+### 9. Configuration Management
+
+**Centralized Configuration** (Future):
+- Spring Cloud Config Server
+- Externalized configuration
+- Environment-specific configs
+
+---
+
+### 10. Service Versioning
+
+**API Versioning** (Future):
+- URL versioning: `/api/v1/products`
+- Header versioning: `Accept: application/vnd.api+json;version=1`
+
+---
+
+### Microservices Best Practices Implemented
+
+✅ **Single Responsibility**: Each service has one responsibility  
+✅ **Database per Service**: Each service has its own database  
+✅ **API Gateway**: Single entry point  
+✅ **Service Discovery**: Dynamic service location  
+✅ **Circuit Breaker**: Fault tolerance  
+✅ **Event-Driven**: Asynchronous communication  
+✅ **Distributed Tracing**: Request tracking  
+✅ **Health Checks**: Service monitoring  
+✅ **Stateless Services**: No server-side sessions  
+✅ **Idempotency**: Retry-safe operations  
+
+---
+
+## 📁 Project Structure
+
+The project follows standard Maven multi-module structure:
+
+```
+microservices/
+├── service-registry/          # Eureka Server
+├── api-gateway/               # Spring Cloud Gateway
+├── user-service/              # User management & authentication
+├── product-service/           # Product catalog
+├── order-service/             # Order processing
+├── payment-service/           # Payment processing
+├── inventory-service/         # Stock management
+├── notification-service/      # Notification handling
+├── ecommerce-ui/              # React frontend
+├── docker-compose.yml         # Kafka, Zookeeper, Zipkin
+├── start-all.sh               # Quick start script
+└── README.md                  # This file
+```
+
+---
+
+## 🔧 Troubleshooting
+
+### Common Issues
+
+#### 1. Service Registration Failed
+
+**Problem**: Service not appearing in Eureka dashboard
+
+**Solutions**:
+- Check Eureka server is running on port 8761
+- Verify `eureka.client.service-url.defaultZone` in `application.yml`
+- Check service logs for registration errors
+
+#### 2. Database Connection Failed
+
+**Problem**: `Connection refused` or `database does not exist`
+
+**Solutions**:
+- Verify PostgreSQL is running: `psql -U ujjawalkumar -d postgres`
+- Check connection details in `application.yml`
+- Verify database exists: `CREATE DATABASE postgres;`
+
+#### 3. CORS Errors
+
+**Problem**: Frontend cannot call APIs
+
+**Solutions**:
+- Verify API Gateway CORS configuration
+- Check `CorsConfig.java` in API Gateway
+- Verify frontend URL in allowed origins
+
+---
+
+## 🚀 Production Considerations
+
+### Security
+
+- [ ] Use environment variables for sensitive data (JWT secret, DB password)
+- [ ] Enable HTTPS/TLS
+- [ ] Implement rate limiting
+- [ ] Add API authentication
+- [ ] Use secrets management (Vault, AWS Secrets Manager)
+
+### Performance
+
+- [ ] Enable connection pooling
+- [ ] Add caching (Redis)
+- [ ] Optimize database queries
+- [ ] Use CDN for static assets
+
+### Scalability
+
+- [ ] Horizontal scaling (multiple service instances)
+- [ ] Load balancing
+- [ ] Database replication
+- [ ] Kafka cluster setup
+
+### Monitoring
+
+- [ ] Centralized logging (ELK Stack)
+- [ ] Metrics collection (Prometheus + Grafana)
+- [ ] Alerting
+- [ ] APM (Application Performance Monitoring)
+
+---
+
+## 📝 Additional Notes
+
+- All Java files include comprehensive comments explaining ACID properties, deadlock prevention, and microservices concepts
+- Code follows Spring Boot best practices
+- Database migrations can be added using Flyway or Liquibase
+- Docker containers can be created for each service
+
+---
+
+## 📚 References
+
+- [Spring Boot Documentation](https://spring.io/projects/spring-boot)
+- [Spring Cloud Documentation](https://spring.io/projects/spring-cloud)
+- [Microservices Patterns](https://microservices.io/patterns/)
+- [Resilience4j Documentation](https://resilience4j.readme.io/)
+- [Kafka Documentation](https://kafka.apache.org/documentation/)
+
+---
+
+## 📄 License
+
+This project is for educational purposes.
+
+---
+
+**Last Updated**: 2024
+
+**Maintained by**: Development Team
