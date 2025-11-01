@@ -5,28 +5,118 @@ import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import java.math.BigDecimal;
 
+/**
+ * PRODUCT ENTITY - Product Data Model
+ * 
+ * ========================================================================
+ * ACID PROPERTIES - ENTITY LEVEL
+ * ========================================================================
+ * 
+ * ATOMICITY:
+ * - Product save is atomic
+ * - All product fields saved together
+ * 
+ * CONSISTENCY:
+ * - Validation constraints enforced (@NotBlank, @DecimalMin)
+ * - Price must be positive
+ * - Name must not be blank
+ * 
+ * ISOLATION:
+ * - Concurrent product updates handled safely
+ * - Product Service manages product data
+ * 
+ * DURABILITY:
+ * - Product data persisted permanently
+ * 
+ * ========================================================================
+ * VALIDATION CONSTRAINTS
+ * ========================================================================
+ * 
+ * JAKARTA VALIDATION:
+ * - @NotBlank: Field cannot be null or empty
+ * - @DecimalMin: Minimum value constraint
+ * - Validation enforced at service/controller layer
+ * 
+ * ========================================================================
+ * MICROSERVICES CONCEPT
+ * ========================================================================
+ * 
+ * SEPARATION OF CONCERNS:
+ * - Product data in Product Service
+ * - Order Service stores product snapshot (denormalization)
+ * - Inventory Service manages stock (separate concern)
+ */
 @Entity
-@Table(name = "products")
+@Table(name = "products") // Database table name
 public class Product {
+    
+    /**
+     * PRIMARY KEY
+     * Auto-generated ID
+     */
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
     
-    @NotBlank
+    /**
+     * PRODUCT NAME
+     * 
+     * VALIDATION:
+     * - @NotBlank: Cannot be null or empty
+     * - Must have value
+     * 
+     * ACID: Consistency - Name required for product
+     */
+    @NotBlank // Validation: Cannot be blank
     private String name;
     
+    /**
+     * PRODUCT DESCRIPTION
+     * Detailed description of the product
+     */
     private String description;
     
-    @DecimalMin(value = "0.0", inclusive = false)
+    /**
+     * PRODUCT PRICE
+     * 
+     * VALIDATION:
+     * - @DecimalMin(value = "0.0", inclusive = false): Must be greater than 0
+     * - Price cannot be zero or negative
+     * 
+     * ACID: Consistency - Price must be positive
+     */
+    @DecimalMin(value = "0.0", inclusive = false) // Must be > 0
     private BigDecimal price;
     
+    /**
+     * PRODUCT CATEGORY
+     * Category classification (e.g., "Electronics", "Clothing")
+     */
     private String category;
+    
+    /**
+     * IMAGE URL
+     * URL to product image
+     */
     private String imageUrl;
+    
+    /**
+     * STOCK QUANTITY
+     * 
+     * NOTE: This is denormalized data
+     * Actual stock managed by Inventory Service
+     * This field may be used for quick reference or legacy support
+     */
     private Integer stockQuantity;
     
+    /**
+     * DEFAULT CONSTRUCTOR
+     * JPA requirement
+     */
     public Product() {}
     
-    // Getters and Setters
+    // ========== GETTERS AND SETTERS ==========
+    
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
     
@@ -48,4 +138,3 @@ public class Product {
     public Integer getStockQuantity() { return stockQuantity; }
     public void setStockQuantity(Integer stockQuantity) { this.stockQuantity = stockQuantity; }
 }
-
