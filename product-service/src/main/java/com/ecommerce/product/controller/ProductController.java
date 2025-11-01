@@ -9,72 +9,175 @@ import org.springframework.web.bind.annotation.*;
 import java.util.Collections;
 import java.util.List;
 
+/**
+ * PRODUCT CONTROLLER - REST API for Product Management
+ * 
+ * PURPOSE (उद्देश्य):
+ * - Product CRUD operations expose करना
+ * - Frontend को product data provide करना
+ * - Pagination support
+ * 
+ * REST API ENDPOINTS:
+ * - GET /api/products - Get all products (with pagination)
+ * - GET /api/products/{id} - Get product by ID
+ * - GET /api/products/category/{category} - Get products by category
+ * - GET /api/products/search?q=keyword - Search products
+ * - POST /api/products - Create product
+ * - PUT /api/products/{id} - Update product
+ * - DELETE /api/products/{id} - Delete product
+ */
 @RestController
 @RequestMapping("/api/products")
 @CrossOrigin(origins = "*")
 public class ProductController {
     
+    /**
+     * PRODUCT SERVICE DEPENDENCY
+     */
     private final ProductService productService;
     
+    /**
+     * CONSTRUCTOR INJECTION
+     */
     public ProductController(ProductService productService) {
         this.productService = productService;
     }
     
+    /**
+     * GET ALL PRODUCTS - With Pagination Support
+     * 
+     * FLOW:
+     * 1. All products fetch करो
+     * 2. Pagination apply करो (page, size parameters)
+     * 3. X-Total-Count header में total count भेजो
+     * 4. Paginated list return करो
+     * 
+     * PAGINATION CONCEPT:
+     * - Large datasets को chunks में return करता है
+     * - Performance improvement (less data transfer)
+     * - Frontend infinite scroll के लिए useful
+     * 
+     * QUERY PARAMETERS:
+     * - page: Page number (0-indexed, default: 0)
+     * - size: Items per page (default: 100)
+     * 
+     * EXAMPLE:
+     * GET /api/products?page=0&size=20
+     * - Returns first 20 products
+     * - Header: X-Total-Count: 100 (total products available)
+     * 
+     * @param page - Page number (0-based index)
+     * @param size - Number of items per page
+     * @return ResponseEntity<List<Product>> - Paginated products with total count header
+     */
     @GetMapping
     public ResponseEntity<List<Product>> getAllProducts(
             @RequestParam(required = false, defaultValue = "0") int page,
             @RequestParam(required = false, defaultValue = "100") int size) {
+        // Fetch all products from service
         List<Product> allProducts = productService.getAllProducts();
         
-        // Simple pagination - limit response size for performance
-        int start = page * size;
-        int end = Math.min(start + size, allProducts.size());
+        // Calculate pagination boundaries
+        int start = page * size; // Start index
+        int end = Math.min(start + size, allProducts.size()); // End index (don't exceed list size)
         
+        // If page number too high → return empty list
         if (start >= allProducts.size()) {
             return ResponseEntity.ok(Collections.emptyList());
         }
         
+        // Extract paginated sublist
         List<Product> paginatedProducts = allProducts.subList(start, end);
+        
+        // Return with X-Total-Count header (frontend pagination के लिए)
         return ResponseEntity.ok()
-                .header("X-Total-Count", String.valueOf(allProducts.size()))
-                .body(paginatedProducts);
+                .header("X-Total-Count", String.valueOf(allProducts.size())) // Total count for frontend
+                .body(paginatedProducts); // Paginated products
     }
     
+    /**
+     * GET PRODUCT BY ID
+     * 
+     * Single product details fetch करता है
+     * 
+     * @param id - Product ID
+     * @return ResponseEntity<Product> - 200 OK with product, or 404 Not Found
+     */
     @GetMapping("/{id}")
     public ResponseEntity<Product> getProductById(@PathVariable Long id) {
         return productService.getProductById(id)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+                .map(ResponseEntity::ok) // If found → 200 OK
+                .orElse(ResponseEntity.notFound().build()); // If not found → 404
     }
     
+    /**
+     * GET PRODUCTS BY CATEGORY
+     * 
+     * Category-wise products filter करता है
+     * 
+     * @param category - Product category
+     * @return ResponseEntity<List<Product>> - Products in category
+     */
     @GetMapping("/category/{category}")
     public ResponseEntity<List<Product>> getProductsByCategory(@PathVariable String category) {
         return ResponseEntity.ok(productService.getProductsByCategory(category));
     }
     
+    /**
+     * SEARCH PRODUCTS
+     * 
+     * Product name में search करता है
+     * 
+     * @param q - Search query/keyword
+     * @return ResponseEntity<List<Product>> - Matching products
+     */
     @GetMapping("/search")
     public ResponseEntity<List<Product>> searchProducts(@RequestParam String q) {
         return ResponseEntity.ok(productService.searchProducts(q));
     }
     
+    /**
+     * CREATE PRODUCT
+     * 
+     * New product add करता है
+     * 
+     * @param product - Product object to create
+     * @return ResponseEntity<Product> - 201 Created with created product
+     */
     @PostMapping
     public ResponseEntity<Product> createProduct(@RequestBody Product product) {
         return ResponseEntity.status(HttpStatus.CREATED).body(productService.createProduct(product));
     }
     
+    /**
+     * UPDATE PRODUCT
+     * 
+     * Existing product update करता है
+     * 
+     * @param id - Product ID
+     * @param product - Updated product data
+     * @return ResponseEntity<Product> - 200 OK with updated product, or 404 Not Found
+     */
     @PutMapping("/{id}")
     public ResponseEntity<Product> updateProduct(@PathVariable Long id, @RequestBody Product product) {
         try {
             return ResponseEntity.ok(productService.updateProduct(id, product));
         } catch (RuntimeException e) {
-            return ResponseEntity.notFound().build();
+            return ResponseEntity.notFound().build(); // Product not found
         }
     }
     
+    /**
+     * DELETE PRODUCT
+     * 
+     * Product delete करता है
+     * 
+     * @param id - Product ID to delete
+     * @return ResponseEntity<Void> - 204 No Content (success)
+     */
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteProduct(@PathVariable Long id) {
         productService.deleteProduct(id);
-        return ResponseEntity.noContent().build();
+        return ResponseEntity.noContent().build(); // 204 No Content
     }
 }
-
