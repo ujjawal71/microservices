@@ -63,16 +63,35 @@ export const CartProvider = ({ children }) => {
     setCartItems((prevItems) => prevItems.filter(item => item.id !== productId));
   };
 
-  const updateQuantity = (productId, quantity) => {
+  const updateQuantity = (productId, quantity, availableStock = null) => {
     if (quantity <= 0) {
       removeFromCart(productId);
       return;
     }
-    setCartItems((prevItems) =>
-      prevItems.map(item =>
-        item.id === productId ? { ...item, quantity } : item
-      )
-    );
+    
+    setCartItems((prevItems) => {
+      const item = prevItems.find(i => i.id === productId);
+      if (!item) return prevItems;
+      
+      // Check stock limit if available stock is provided
+      // availableStock can come from:
+      // 1. item.stockQuantity (stored when product was added to cart)
+      // 2. availableStock parameter (latest stock from API)
+      const stockLimit = availableStock !== null ? availableStock : 
+                        (item.stockQuantity !== null && item.stockQuantity !== undefined ? item.stockQuantity : null);
+      
+      if (stockLimit !== null && quantity > stockLimit) {
+        alert(`Only ${stockLimit} items available in stock. Cannot set quantity to ${quantity}.`);
+        // Set quantity to max available stock instead of rejecting
+        return prevItems.map(i =>
+          i.id === productId ? { ...i, quantity: stockLimit } : i
+        );
+      }
+      
+      return prevItems.map(i =>
+        i.id === productId ? { ...i, quantity } : i
+      );
+    });
   };
 
   const clearCart = () => {

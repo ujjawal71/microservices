@@ -256,6 +256,7 @@ const Cart = () => {
             <TableRow>
               <TableCell>Product</TableCell>
               <TableCell>Price</TableCell>
+              <TableCell>Stock</TableCell>
               <TableCell>Quantity</TableCell>
               <TableCell>Total</TableCell>
               <TableCell>Actions</TableCell>
@@ -267,12 +268,39 @@ const Cart = () => {
                 <TableCell>{item.name}</TableCell>
                 <TableCell>₹{item.price}</TableCell>
                 <TableCell>
+                  {item.stockQuantity !== null && item.stockQuantity !== undefined ? (
+                    <Typography 
+                      variant="body2" 
+                      color={item.stockQuantity > 0 ? 'success.main' : 'error.main'}
+                      fontWeight="bold"
+                    >
+                      {item.stockQuantity > 0 ? `${item.stockQuantity} available` : 'Out of Stock'}
+                    </Typography>
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      N/A
+                    </Typography>
+                  )}
+                </TableCell>
+                <TableCell>
                   <TextField
                     type="number"
                     value={item.quantity}
-                    onChange={(e) => updateQuantity(item.id, parseInt(e.target.value) || 1)}
-                    inputProps={{ min: 1 }}
+                    onChange={(e) => {
+                      const newQuantity = parseInt(e.target.value) || 1;
+                      // Pass available stock to updateQuantity for validation
+                      updateQuantity(item.id, newQuantity, item.stockQuantity);
+                    }}
+                    inputProps={{ 
+                      min: 1,
+                      max: item.stockQuantity && item.stockQuantity > 0 ? item.stockQuantity : undefined
+                    }}
                     sx={{ width: 80 }}
+                    helperText={item.stockQuantity && item.stockQuantity > 0 
+                      ? `Max: ${item.stockQuantity} available` 
+                      : item.stockQuantity === 0 
+                        ? 'Out of stock' 
+                        : ''}
                   />
                 </TableCell>
                 <TableCell>₹{(item.price * item.quantity).toFixed(2)}</TableCell>

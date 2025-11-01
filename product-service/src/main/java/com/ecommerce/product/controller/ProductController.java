@@ -182,6 +182,30 @@ public class ProductController {
     }
     
     /**
+     * DECREMENT STOCK
+     * 
+     * Order confirmed होने पर product stock कम करने के लिए
+     * 
+     * USE CASE:
+     * - Payment success → Order CONFIRMED
+     * - Stock deduct करना (2 stock था, 1 order → 1 stock हो जाएगा)
+     * 
+     * @param id - Product ID
+     * @param quantity - कितना stock कम करना है
+     * @return ResponseEntity<Product> - Updated product
+     */
+    @PostMapping("/{id}/decrement-stock")
+    public ResponseEntity<?> decrementStock(@PathVariable Long id,
+                                           @RequestParam Integer quantity) {
+        try {
+            Product updatedProduct = productService.decrementStock(id, quantity);
+            return ResponseEntity.ok(updatedProduct);
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
+    }
+    
+    /**
      * GET IN STOCK PRODUCTS
      * 
      * Get only products that are currently in stock (stockQuantity > 0)

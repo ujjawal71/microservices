@@ -4,6 +4,8 @@ import com.ecommerce.product.model.Product;
 import com.ecommerce.product.repository.ProductRepository;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Collections;
 import java.util.List;
@@ -182,6 +184,49 @@ public class ProductService {
      */
     public void deleteProduct(Long id) {
         productRepository.deleteById(id);
+    }
+    
+    /**
+     * DECREMENT STOCK
+     * 
+     * Order confirmed होने पर stock कम करना
+     * 
+     * FLOW:
+     * 1. Order created → Stock reserved
+     * 2. Payment success → Order CONFIRMED
+     * 3. This method called → Product stock_quantity decreased
+     * 
+     * @param id - Product ID
+     * @param quantity - कितना stock कम करना है
+     * @return Product - Updated product
+     * @throws RuntimeException - If insufficient stock
+     */
+    @Transactional(
+        isolation = Isolation.READ_COMMITTED,
+        timeout = 10
+    )
+    public Product decrementStock(Long id, Integer quantity) {
+        Product product = productRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Product not found"));
+        
+        // Validate quantity
+        if (quantity <= 0) {
+            throw new RuntimeException("Quantity must be greater than 0");
+        }
+        
+        // Check current stock
+        Integer currentStock = product.getStockQuantity();
+        if (currentStock == null || currentStock < quantity) {
+            throw new RuntimeException("Insufficient stock. Available: " + 
+                                     (currentStock != null ? currentStock : 0) + 
+                                     ", Requested: " + quantity);
+        }
+        
+        // Decrement stock
+        product.setStockQuantity(currentStock - quantity);
+        
+        // Save updated product
+        return productRepository.save(product);
     }
     
     /**

@@ -24,5 +24,13 @@ public class InventoryClientFallback implements InventoryClient {
         System.err.println("Inventory Service unavailable - Cannot reserve stock. Product ID: " + productId);
         return false;
     }
+    
+    @Override
+    public Object deductInventory(Long productId, Integer quantity) {
+        // Fallback: Log error but don't fail order
+        // Stock deduction can be retried later if inventory service recovers
+        System.err.println("Inventory Service unavailable - Cannot deduct stock. Product ID: " + productId + ", Quantity: " + quantity);
+        return null;
+    }
 }
 

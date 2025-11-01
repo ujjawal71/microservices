@@ -288,38 +288,58 @@ public class OrderService {
                 System.out.println("Product fetched: " + product.getId() + " - " + product.getName() + 
                                   ", Stock: " + product.getStockQuantity());
                 
-                // STEP 4.2: QUICK STOCK VALIDATION (from Product Service)
-                // First check: If product stock is null or 0, reject immediately
-                if (product.getStockQuantity() == null || product.getStockQuantity() <= 0) {
-                    throw new RuntimeException("Product '" + product.getName() + "' (ID: " + product.getId() + 
-                                             ") is OUT OF STOCK. Cannot create order.");
-                }
-                
-                // STEP 4.3: Validate quantity requested
+                // STEP 4.2: VALIDATE QUANTITY REQUESTED
                 if (itemDto.getQuantity() <= 0) {
                     throw new RuntimeException("Order quantity must be greater than 0 for product ID: " + product.getId());
                 }
                 
-                // STEP 4.4: Check if requested quantity exceeds available stock
-                if (itemDto.getQuantity() > product.getStockQuantity()) {
-                    throw new RuntimeException("Insufficient stock for product '" + product.getName() + 
-                                             "'. Available: " + product.getStockQuantity() + 
-                                             ", Requested: " + itemDto.getQuantity());
+                // STEP 4.3: QUICK PRE-CHECK (from Product Service) - Optional early rejection
+                // NOTE: This is just a quick check. REAL validation happens in Inventory Service.
+                // Product Service stock is denormalized data and might be stale.
+                // Inventory Service is the single source of truth for stock availability.
+                if (product.getStockQuantity() != null && product.getStockQuantity() <= 0) {
+                    throw new RuntimeException("Product '" + product.getName() + "' (ID: " + product.getId() + 
+                                             ") appears to be OUT OF STOCK. Cannot create order.");
                 }
                 
-                // STEP 4.5: RESERVE STOCK ATOMICALLY (RACE CONDITION PREVENTION)
-                // This is the critical step that prevents overselling
-                // Inventory Service uses pessimistic locking to ensure only one reservation succeeds
-                System.out.println("Reserving stock in Inventory Service - Product ID: " + product.getId() + 
+                // STEP 4.4: RESERVE STOCK ATOMICALLY (RACE CONDITION PREVENTION) - SINGLE SOURCE OF TRUTH
+                // ========================================================================
+                // CRITICAL: Inventory Service is the SINGLE SOURCE OF TRUTH for stock
+                // ========================================================================
+                // Why not rely on Product Service stock?
+                // - Product Service stock_quantity is denormalized (might be stale)
+                // - Inventory Service has real-time data with pessimistic locking
+                // - Inventory Service tracks reservedQuantity (orders in progress)
+                // - Only Inventory Service can prevent overselling with race condition protection
+                //
+                // FLOW:
+                // 1. Inventory Service uses pessimistic locking (SELECT FOR UPDATE)
+                // 2. Checks availableQuantity = quantity - reservedQuantity
+                // 3. If availableQuantity >= requested quantity → Reserve
+                // 4. If availableQuantity < requested quantity → Return false (prevents overselling)
+                //
+                // EXAMPLE SCENARIO (Stock = 2, 2 customers order simultaneously):
+                // Customer 1 (Order 2 items):
+                //   → Lock inventory row → availableQuantity = 2 - 0 = 2
+                //   → 2 >= 2? YES → Reserve 2 → reservedQuantity = 2 → Commit
+                // Customer 2 (Order 1 item):
+                //   → Wait for lock → Lock inventory row → availableQuantity = 2 - 2 = 0
+                //   → 0 >= 1? NO → Return false → Order rejected ✅
+                // ========================================================================
+                System.out.println("🔒 Reserving stock in Inventory Service (Single Source of Truth) - Product ID: " + product.getId() + 
                                   ", Quantity: " + itemDto.getQuantity());
                 Boolean reservationSuccess = inventoryClient.reserveInventory(product.getId(), itemDto.getQuantity());
                 
                 if (reservationSuccess == null || !reservationSuccess) {
-                    // Stock reservation failed - another order may have taken the last stock
-                    // This handles the race condition scenario
+                    // Stock reservation failed - This is the REAL validation that prevents overselling
+                    // Possible reasons:
+                    // 1. Insufficient available stock (another order took it)
+                    // 2. Inventory record doesn't exist
+                    // 3. Race condition: Another order reserved stock at the same time
                     throw new RuntimeException("Stock reservation failed for product '" + product.getName() + 
                                              "' (ID: " + product.getId() + "). " +
-                                             "Another order may have taken the available stock. " +
+                                             "Insufficient available stock. " +
+                                             "This product may have been reserved by another order. " +
                                              "Please try again with a lower quantity or check back later.");
                 }
                 
@@ -504,6 +524,58 @@ public class OrderService {
         // Example: Cannot go from DELIVERED back to PENDING
         if (!isValidStatusTransition(order.getStatus(), status)) {
             throw new RuntimeException("Invalid status transition from " + order.getStatus() + " to " + status);
+        }
+        
+        // STOCK DEDUCTION: When order status changes to CONFIRMED (payment success)
+        // ========================================================================
+        // FLOW:
+        // 1. Order created → Stock reserved (reservedQuantity increases in Inventory Service)
+        // 2. Payment success → Order status changes to CONFIRMED
+        // 3. Deduct actual stock from both:
+        //    - Product Service (products.stock_quantity)
+        //    - Inventory Service (inventory.quantity and reservedQuantity)
+        // ========================================================================
+        if (status == Order.OrderStatus.CONFIRMED && order.getStatus() == Order.OrderStatus.PENDING) {
+            System.out.println("💰 Order confirmed - Deducting stock for order ID: " + id);
+            
+            // Deduct stock for each item in the order
+            for (OrderItem item : order.getItems()) {
+                Long productId = item.getProductId();
+                Integer quantity = item.getQuantity();
+                
+                try {
+                    // Step 1: Deduct from Inventory Service (SINGLE SOURCE OF TRUTH)
+                    // Inventory Service uses pessimistic locking to ensure atomic deduction
+                    // This is the PRIMARY stock deduction - must succeed
+                    System.out.println("📦 Deducting from Inventory Service (Primary) - Product ID: " + productId + ", Quantity: " + quantity);
+                    inventoryClient.deductInventory(productId, quantity);
+                    System.out.println("✅ Inventory Service stock deducted successfully");
+                    
+                    // Step 2: Sync Product Service (denormalized stock_quantity)
+                    // Product Service stock is for display purposes only
+                    // Sync it with Inventory Service to keep frontend accurate
+                    System.out.println("🔄 Syncing Product Service stock - Product ID: " + productId + ", Quantity: " + quantity);
+                    try {
+                        productClient.decrementStock(productId, quantity);
+                        System.out.println("✅ Product Service stock synced successfully");
+                    } catch (Exception productSyncError) {
+                        // Product Service sync failure is non-critical
+                        // Inventory Service (source of truth) already deducted
+                        // Log but don't fail order confirmation
+                        System.err.println("⚠️ Warning: Product Service stock sync failed (non-critical): " + productSyncError.getMessage());
+                        System.err.println("   Inventory Service stock already deducted. Product Service can be synced later.");
+                    }
+                    
+                    System.out.println("✅ Stock deduction complete - Product ID: " + productId);
+                } catch (Exception e) {
+                    // CRITICAL: If Inventory Service deduction fails, this is a serious issue
+                    // Order is confirmed but stock not deducted - needs manual intervention
+                    System.err.println("❌ CRITICAL: Failed to deduct stock from Inventory Service for Product ID " + productId + ": " + e.getMessage());
+                    System.err.println("   Order is confirmed but stock not deducted. Manual intervention required!");
+                    // Continue with other items - order status update should not fail
+                    // But this needs to be logged and alerted
+                }
+            }
         }
         
         order.setStatus(status); // Update status

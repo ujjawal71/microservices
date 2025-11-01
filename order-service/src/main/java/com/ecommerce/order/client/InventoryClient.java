@@ -62,5 +62,23 @@ public interface InventoryClient {
     @PostMapping("/api/inventory/reserve") // POST endpoint in Inventory Service
     Boolean reserveInventory(@RequestParam("productId") Long productId,
                            @RequestParam("quantity") Integer quantity);
+    
+    /**
+     * DEDUCT INVENTORY
+     * 
+     * Order confirmed होने पर actual stock कम करने के लिए
+     * 
+     * FLOW:
+     * 1. Order created → Stock reserved
+     * 2. Payment success → Order CONFIRMED
+     * 3. This method called → Actual stock deducted
+     * 
+     * @param productId - Product ID
+     * @param quantity - Quantity to deduct
+     * @return Object - Response from Inventory Service
+     */
+    @PostMapping("/api/inventory/deduct") // POST endpoint in Inventory Service
+    Object deductInventory(@RequestParam("productId") Long productId,
+                          @RequestParam("quantity") Integer quantity);
 }
 

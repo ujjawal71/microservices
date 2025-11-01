@@ -89,4 +89,16 @@ public interface ProductClient {
      */
     @GetMapping("/api/products/{id}") // GET endpoint in Product Service
     ProductDto getProduct(@PathVariable Long id); // Extract ID from URL path
+    
+    /**
+     * DECREMENT PRODUCT STOCK
+     * 
+     * Order confirmed होने पर product stock कम करने के लिए
+     * 
+     * @param id - Product ID
+     * @param quantity - Quantity to decrement
+     * @return Object - Response from Product Service
+     */
+    @PostMapping("/api/products/{id}/decrement-stock") // POST endpoint in Product Service
+    Object decrementStock(@PathVariable Long id, @RequestParam Integer quantity);
 }

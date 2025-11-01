@@ -174,9 +174,67 @@ public class InventoryController {
     @PostMapping("/reserve") // POST /api/inventory/reserve
     public ResponseEntity<Boolean> reserveInventory(@RequestParam Long productId,
                                                    @RequestParam Integer quantity) {
-        // Reserve inventory through service layer
-        boolean reserved = inventoryService.reserveInventory(productId, quantity);
-        // Return result (true = success, false = insufficient stock)
-        return ResponseEntity.ok(reserved);
+        try {
+            // Reserve inventory through service layer
+            // This method returns:
+            // - true: Stock successfully reserved
+            // - false: Insufficient available stock
+            // - throws RuntimeException: Inventory record not found or other error
+            boolean reserved = inventoryService.reserveInventory(productId, quantity);
+            // Return result (true = success, false = insufficient stock)
+            return ResponseEntity.ok(reserved);
+        } catch (RuntimeException e) {
+            // Handle exceptions (e.g., "Product inventory not found")
+            // Return false instead of throwing - indicates reservation failed
+            // This prevents FeignClient from throwing exceptions
+            System.err.println("❌ Stock reservation error for Product ID " + productId + ": " + e.getMessage());
+            return ResponseEntity.ok(false); // Return false = reservation failed
+        }
+    }
+    
+    /**
+     * DEDUCT INVENTORY
+     * 
+     * HTTP Method: POST
+     * URL: POST /api/inventory/deduct?productId=1&quantity=2
+     * 
+     * USE CASE:
+     * - Order confirmed होने पर actual stock कम करना
+     * - Payment success के बाद stock deduct करना
+     * - Reserved stock को actual stock से deduct करना
+     * 
+     * FLOW:
+     * 1. Order created → Stock reserved (reservedQuantity increases)
+     * 2. Payment success → Order CONFIRMED
+     * 3. This endpoint called → Actual stock deducted (quantity decreases, reservedQuantity decreases)
+     * 
+     * @PostMapping: POST request handle करता है (Action)
+     * @RequestParam: Query parameters से data
+     * 
+     * @param productId - Product का ID
+     * @param quantity - कितना stock deduct करना है
+     * @return ResponseEntity<Inventory> - Updated inventory
+     * 
+     * RESPONSE CODES:
+     * - 200 OK: Stock deducted successfully
+     * - 400 Bad Request: Insufficient stock
+     * 
+     * EXAMPLE REQUEST:
+     * POST http://localhost:8085/api/inventory/deduct?productId=1&quantity=2
+     */
+    @PostMapping("/deduct") // POST /api/inventory/deduct
+    public ResponseEntity<?> deductInventory(@RequestParam Long productId,
+                                            @RequestParam Integer quantity) {
+        try {
+            // Deduct inventory through service layer
+            inventoryService.deductInventory(productId, quantity);
+            // Get updated inventory to return
+            Optional<Inventory> inventory = inventoryService.getInventoryByProductId(productId);
+            return inventory.map(ResponseEntity::ok)
+                    .orElse(ResponseEntity.ok().build());
+        } catch (RuntimeException e) {
+            // Insufficient stock or other error
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
     }
 }

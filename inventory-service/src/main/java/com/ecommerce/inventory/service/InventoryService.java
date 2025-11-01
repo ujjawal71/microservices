@@ -195,49 +195,92 @@ public class InventoryService {
         rollbackFor = Exception.class          // Rollback on any exception
     )
     public boolean reserveInventory(Long productId, Integer quantity) {
+        System.out.println("🔒 [INVENTORY SERVICE] Starting reservation - Product ID: " + productId + ", Quantity: " + quantity);
+        
         // Verify transaction active (ACID: Atomicity check)
+        // NOTE: @Transactional should create transaction before method execution
+        // If this check fails, there's a configuration issue
         if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+            System.err.println("❌ [INVENTORY SERVICE] No active transaction - ACID violation risk");
             throw new RuntimeException("No active transaction - ACID violation risk");
         }
+        System.out.println("✅ [INVENTORY SERVICE] Transaction is active - Isolation: READ_COMMITTED");
         
         // Find inventory WITH PESSIMISTIC LOCK (RACE CONDITION PREVENTION)
         // DEADLOCK PREVENTION: Consistent ordering by productId
         // @Lock(LockModeType.PESSIMISTIC_WRITE) = SELECT ... FOR UPDATE
         // This locks the row until transaction commits, preventing concurrent reservations
+        // CRITICAL: The lock is acquired HERE and held until transaction commits
+        System.out.println("🔒 [INVENTORY SERVICE] Acquiring pessimistic lock on product ID: " + productId);
         Inventory inventory = inventoryRepository.findByProductIdWithLock(productId)
-                .orElseThrow(() -> new RuntimeException("Product not found in inventory"));
+                .orElse(null); // Don't throw - might need to create inventory
+        
+        // CRITICAL FIX: If inventory doesn't exist, we cannot reserve
+        // Inventory record MUST exist before orders can be placed
+        // This prevents overselling when inventory is not properly initialized
+        if (inventory == null) {
+            System.err.println("❌ [INVENTORY SERVICE] Product inventory not found for Product ID: " + productId);
+            throw new RuntimeException("Product inventory not found. Please ensure inventory is initialized for product ID: " + productId + 
+                                     ". Inventory must be created before orders can be placed.");
+        }
+        System.out.println("✅ [INVENTORY SERVICE] Inventory found - Quantity: " + inventory.getQuantity() + 
+                          ", Reserved: " + inventory.getReservedQuantity());
         
         // ACID: Consistency - Check business rule
         // availableQuantity = quantity - reservedQuantity
         int availableQuantity = inventory.getAvailableQuantity();
+        System.out.println("📊 [INVENTORY SERVICE] Available quantity: " + availableQuantity + 
+                          " (Requested: " + quantity + ")");
         
         // Business rule validation
         if (quantity <= 0) {
+            System.err.println("❌ [INVENTORY SERVICE] Invalid quantity: " + quantity);
             throw new RuntimeException("Reserve quantity must be positive - Consistency violation");
         }
         
         // ACID: Consistency - Available stock check
+        // CRITICAL: This check prevents overselling
+        // If availableQuantity < quantity, reservation fails (returns false)
         if (availableQuantity >= quantity) {
+            // CRITICAL: Lock is held here - no other transaction can modify this row
+            // This is the atomic check-and-reserve operation
+            System.out.println("✅ [INVENTORY SERVICE] Sufficient stock available - Proceeding with reservation");
+            
             // ACID: Atomicity - Update reserved quantity
+            int oldReserved = inventory.getReservedQuantity();
             inventory.setReservedQuantity(inventory.getReservedQuantity() + quantity);
+            System.out.println("📝 [INVENTORY SERVICE] Updating reserved quantity: " + oldReserved + " → " + 
+                              inventory.getReservedQuantity());
             
             // ACID: Consistency - Verify constraint still holds
             if (inventory.getAvailableQuantity() < 0) {
+                System.err.println("❌ [INVENTORY SERVICE] Consistency violation - Available quantity became negative");
                 throw new RuntimeException("Insufficient stock - Consistency violation");
             }
             
             // ACID: Durability - Save to database
+            // Lock is still held during save - ensures atomicity
             inventoryRepository.save(inventory);
+            System.out.println("💾 [INVENTORY SERVICE] Inventory updated and saved (lock still held)");
+            
+            // Force flush to ensure lock persists
+            inventoryRepository.flush();
+            System.out.println("🔄 [INVENTORY SERVICE] Flushed to database (lock committed, transaction pending)");
             
             // Verify transaction still active
             if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+                System.err.println("❌ [INVENTORY SERVICE] Transaction lost during operation");
                 throw new RuntimeException("Transaction lost - ACID violation");
             }
             
+            System.out.println("✅ [INVENTORY SERVICE] Reservation successful - Product ID: " + productId + 
+                              ", Reserved: " + quantity);
             return true; // Successfully reserved
         }
         
-        // Insufficient stock
+        // Insufficient stock - Lock will be released when transaction commits/rolls back
+        System.err.println("❌ [INVENTORY SERVICE] Insufficient stock - Available: " + availableQuantity + 
+                          ", Requested: " + quantity);
         return false;
     }
     
@@ -310,8 +353,10 @@ public class InventoryService {
             throw new RuntimeException("No active transaction - ACID violation risk");
         }
         
-        // Find inventory
-        Inventory inventory = inventoryRepository.findByProductId(productId)
+        // Find inventory WITH PESSIMISTIC LOCK (RACE CONDITION PREVENTION)
+        // Use pessimistic locking to prevent concurrent deductions
+        // This ensures stock deduction is atomic and race-condition safe
+        Inventory inventory = inventoryRepository.findByProductIdWithLock(productId)
                 .orElseThrow(() -> new RuntimeException("Product not found in inventory"));
         
         // ACID: Consistency - Check if sufficient stock available
